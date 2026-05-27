@@ -1,0 +1,109 @@
+<?php
+
+namespace App\Services\Workflow;
+
+use App\Models\ExecutionLog;
+use App\Models\Workflow;
+use App\Models\WorkflowExecution;
+use App\Services\Workflow\Nodes\AiNodeExecutor;
+use App\Services\Workflow\Nodes\ApiNodeExecutor;
+use App\Services\Workflow\Nodes\ConditionNodeExecutor;
+use App\Services\Workflow\Nodes\NodeExecutorInterface;
+use App\Services\Workflow\Nodes\SendMessageNodeExecutor;
+use App\Services\Workflow\Nodes\TriggerNodeExecutor;
+use Illuminate\Support\Facades\Log;
+
+class WorkflowExecutionService
+{
+    private const MAX_NODES = 20;
+
+    public function __construct(
+        private readonly WorkflowValidator $validator
+    ) {}
+
+    public function execute(WorkflowExecution $execution): void
+    {
+        $workflow = Workflow::where('user_id', $execution->user_id)->findOrFail($execution->workflow_id);
+
+        if ($workflow->status !== 'published' || ! $workflow->is_active) {
+            $execution->update(['status' => 'failed', 'error_message' => 'Workflow not active']);
+
+            return;
+        }
+
+        $errors = $this->validator->validate($workflow->definition);
+        if (! empty($errors)) {
+            $execution->update(['status' => 'failed', 'error_message' => implode(', ', $errors)]);
+
+            return;
+        }
+
+        $execution->update(['status' => 'running', 'started_at' => now()]);
+        $context = $execution->context ?? [];
+        $nodes = $this->validator->getLinearNodeOrder($workflow->definition);
+
+        if (count($nodes) > self::MAX_NODES) {
+            $execution->update(['status' => 'failed', 'error_message' => 'Too many nodes']);
+
+            return;
+        }
+
+        $executors = $this->getExecutors();
+
+        try {
+            foreach ($nodes as $node) {
+                $executor = $executors[$node['type']] ?? null;
+                if (! $executor) {
+                    continue;
+                }
+
+                $start = microtime(true);
+                $log = ExecutionLog::create([
+                    'workflow_execution_id' => $execution->id,
+                    'node_id' => $node['id'],
+                    'node_type' => $node['type'],
+                    'status' => 'running',
+                    'input' => $context,
+                ]);
+
+                $result = $executor->execute($execution, $node, $context);
+                $context = array_merge($context, $result['output'] ?? []);
+
+                $log->update([
+                    'status' => ($result['success'] ?? false) ? 'completed' : 'failed',
+                    'output' => $result['output'] ?? null,
+                    'error_message' => $result['error'] ?? null,
+                    'duration_ms' => (int) ((microtime(true) - $start) * 1000),
+                ]);
+
+                if (! empty($result['stop'])) {
+                    break;
+                }
+            }
+
+            $execution->update([
+                'status' => 'completed',
+                'context' => $context,
+                'completed_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Workflow execution failed', ['execution_id' => $execution->id, 'error' => $e->getMessage()]);
+            $execution->update([
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'completed_at' => now(),
+            ]);
+        }
+    }
+
+    private function getExecutors(): array
+    {
+        return [
+            'trigger' => app(TriggerNodeExecutor::class),
+            'condition' => app(ConditionNodeExecutor::class),
+            'api' => app(ApiNodeExecutor::class),
+            'ai' => app(AiNodeExecutor::class),
+            'send_message' => app(SendMessageNodeExecutor::class),
+        ];
+    }
+}
