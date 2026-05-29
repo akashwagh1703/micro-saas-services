@@ -13,6 +13,7 @@ class WhatsAppAccount extends Model
         'phone_number_id',
         'business_account_id',
         'verify_token',
+        'app_secret',
         'display_phone_number',
         'is_connected',
         'connected_at',
@@ -21,6 +22,7 @@ class WhatsAppAccount extends Model
     protected $hidden = [
         'access_token',
         'verify_token',
+        'app_secret',
     ];
 
     protected function casts(): array
@@ -28,6 +30,7 @@ class WhatsAppAccount extends Model
         return [
             'access_token' => 'encrypted',
             'verify_token' => 'encrypted',
+            'app_secret' => 'encrypted',
             'is_connected' => 'boolean',
             'connected_at' => 'datetime',
         ];

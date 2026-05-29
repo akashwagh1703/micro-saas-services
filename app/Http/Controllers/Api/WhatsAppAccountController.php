@@ -28,6 +28,7 @@ class WhatsAppAccountController extends Controller
                 'connected_at' => $account->connected_at,
                 'has_access_token' => ! empty($account->access_token),
                 'has_verify_token' => ! empty($account->verify_token),
+                'has_app_secret' => ! empty($account->app_secret),
             ],
             'webhook_url' => url('/api/webhook/whatsapp/'.$request->user()->id),
         ]);
@@ -40,6 +41,7 @@ class WhatsAppAccountController extends Controller
             'phone_number_id' => ['nullable', 'string'],
             'business_account_id' => ['nullable', 'string'],
             'verify_token' => ['nullable', 'string'],
+            'app_secret' => ['nullable', 'string'],
         ]);
 
         $account = WhatsAppAccount::firstOrCreate(['user_id' => $request->user()->id]);

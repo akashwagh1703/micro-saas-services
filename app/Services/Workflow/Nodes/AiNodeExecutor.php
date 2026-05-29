@@ -19,16 +19,12 @@ class AiNodeExecutor implements NodeExecutorInterface
         if (! $result['success']) {
             $fallback = $result['fallback'] ?? ($config['fallback_message'] ?? null);
             if ($fallback) {
-                $context['ai_response'] = $fallback;
-
-                return ['success' => true, 'output' => ['content' => $fallback, 'fallback' => true]];
+                return ['success' => true, 'output' => ['ai_response' => $fallback, 'fallback' => true]];
             }
 
             return ['success' => false, 'output' => $result, 'stop' => true];
         }
 
-        $context['ai_response'] = $result['content'];
-
-        return ['success' => true, 'output' => ['content' => $result['content'], 'usage' => $result['usage'] ?? null]];
+        return ['success' => true, 'output' => ['ai_response' => $result['content'], 'usage' => $result['usage'] ?? null]];
     }
 }

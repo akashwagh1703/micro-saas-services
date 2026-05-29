@@ -21,10 +21,13 @@ class ConditionNodeExecutor implements NodeExecutorInterface
             default => str_contains(strtolower($actual), strtolower($value)),
         };
 
+        // The execution engine routes to the edge whose sourceHandle matches
+        // this branch ('true' / 'false'). It only stops the flow when the
+        // chosen branch has no outgoing edge.
         return [
             'success' => true,
             'output' => ['matched' => $matched],
-            'stop' => ! $matched,
+            'branch' => $matched ? 'true' : 'false',
         ];
     }
 }

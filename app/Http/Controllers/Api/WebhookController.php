@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\ProcessIncomingWhatsAppMessage;
 use App\Models\WhatsAppAccount;
 use App\Services\Inbox\InboxService;
+use App\Services\WhatsApp\WhatsAppService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
@@ -13,7 +14,8 @@ use Illuminate\Support\Facades\Log;
 class WebhookController extends Controller
 {
     public function __construct(
-        private readonly InboxService $inboxService
+        private readonly InboxService $inboxService,
+        private readonly WhatsAppService $whatsAppService
     ) {}
 
     public function verify(Request $request, int $userId): Response
@@ -33,15 +35,21 @@ class WebhookController extends Controller
 
     public function receive(Request $request, int $userId): Response
     {
-        $payload = $request->all();
-
-        if ($this->isStatusUpdate($payload)) {
-            return response('OK', 200);
-        }
-
         $account = WhatsAppAccount::where('user_id', $userId)->where('is_connected', true)->first();
 
         if (! $account) {
+            return response('OK', 200);
+        }
+
+        if (! $this->signatureIsValid($request, $account)) {
+            Log::warning('Webhook signature rejected', ['user_id' => $userId]);
+
+            return response('Invalid signature', 403);
+        }
+
+        $payload = $request->all();
+
+        if ($this->isStatusUpdate($payload)) {
             return response('OK', 200);
         }
 
@@ -82,6 +90,24 @@ class WebhookController extends Controller
         }
 
         return response('OK', 200);
+    }
+
+    private function signatureIsValid(Request $request, WhatsAppAccount $account): bool
+    {
+        // Backward compatible: only enforce when an app secret is configured.
+        if (empty($account->app_secret)) {
+            Log::warning('WhatsApp webhook received without app_secret configured; signature not verified', [
+                'user_id' => $account->user_id,
+            ]);
+
+            return true;
+        }
+
+        return $this->whatsAppService->verifyWebhookSignature(
+            $request->getContent(),
+            $request->header('X-Hub-Signature-256'),
+            $account->app_secret
+        );
     }
 
     private function isStatusUpdate(array $payload): bool

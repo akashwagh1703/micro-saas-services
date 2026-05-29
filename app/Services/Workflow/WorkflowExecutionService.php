@@ -40,20 +40,41 @@ class WorkflowExecutionService
 
         $execution->update(['status' => 'running', 'started_at' => now()]);
         $context = $execution->context ?? [];
-        $nodes = $this->validator->getLinearNodeOrder($workflow->definition);
 
-        if (count($nodes) > self::MAX_NODES) {
-            $execution->update(['status' => 'failed', 'error_message' => 'Too many nodes']);
+        $definition = $workflow->definition;
+        $nodesById = collect($definition['nodes'])->keyBy('id');
+        $edges = collect($definition['edges'] ?? []);
+        $trigger = collect($definition['nodes'])->firstWhere('type', 'trigger');
+
+        if (! $trigger) {
+            $execution->update(['status' => 'failed', 'error_message' => 'No trigger node']);
 
             return;
         }
 
         $executors = $this->getExecutors();
+        $currentId = $trigger['id'];
+        $visited = [];
+        $steps = 0;
 
         try {
-            foreach ($nodes as $node) {
+            while ($currentId !== null && ! isset($visited[$currentId])) {
+                if (++$steps > self::MAX_NODES) {
+                    $execution->update(['status' => 'failed', 'error_message' => 'Too many nodes']);
+
+                    return;
+                }
+
+                $visited[$currentId] = true;
+                $node = $nodesById->get($currentId);
+                if (! $node) {
+                    break;
+                }
+
                 $executor = $executors[$node['type']] ?? null;
                 if (! $executor) {
+                    $currentId = $this->resolveNextNodeId($edges, $node, null);
+
                     continue;
                 }
 
@@ -79,6 +100,8 @@ class WorkflowExecutionService
                 if (! empty($result['stop'])) {
                     break;
                 }
+
+                $currentId = $this->resolveNextNodeId($edges, $node, $result);
             }
 
             $execution->update([
@@ -94,6 +117,43 @@ class WorkflowExecutionService
                 'completed_at' => now(),
             ]);
         }
+    }
+
+    /**
+     * Decide the next node id to run, honouring condition branches.
+     *
+     * Condition nodes route via the edge whose `sourceHandle` equals the
+     * chosen branch ('true' / 'false'). For backward compatibility a matched
+     * (true) branch may fall back to a single unlabeled edge, while an
+     * unmatched (false) branch with no explicit edge stops the flow.
+     */
+    private function resolveNextNodeId(\Illuminate\Support\Collection $edges, array $node, ?array $result): ?string
+    {
+        $outgoing = $edges->where('source', $node['id'])->values();
+
+        if ($outgoing->isEmpty()) {
+            return null;
+        }
+
+        if (($node['type'] ?? null) === 'condition' && $result !== null) {
+            $branch = $result['branch'] ?? (($result['output']['matched'] ?? false) ? 'true' : 'false');
+
+            $branchEdge = $outgoing->first(fn ($e) => ($e['sourceHandle'] ?? null) === $branch);
+
+            if ($branchEdge) {
+                return $branchEdge['target'] ?? null;
+            }
+
+            if ($branch === 'true') {
+                $unlabeled = $outgoing->first(fn ($e) => empty($e['sourceHandle']));
+
+                return $unlabeled['target'] ?? null;
+            }
+
+            return null;
+        }
+
+        return $outgoing->first()['target'] ?? null;
     }
 
     private function getExecutors(): array
